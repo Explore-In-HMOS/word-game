@@ -1,6 +1,6 @@
 import { CURRENT_LEVEL_KEY, getLevelById, Level, MAX_UNLOCKED_KEY } from '../model/LevelData'
 import { AppSizes, GameLayout } from '../common/Constants'
-import { cryptoFramework } from '@kit.CryptoArchitectureKit'
+import { secureRandomNumber } from '../utils/SecureRandom'
 
 interface WordPos {
   row: number
@@ -8,16 +8,13 @@ interface WordPos {
   dir: string
 }
 
-function getRandomValue(): number {
-  try {
-    const random = cryptoFramework.createRandom();
-    const randomBytes = random.generateRandomSync(4);
-    const view = new DataView(randomBytes.data.buffer);
-    const randomUint32 = view.getUint32(0, false);
-    return randomUint32 / 4294967296;
-  } catch (error) {
-    console.error('Random generation error:', error);
-    return 1
+class HintCandidate {
+  slotIndex: number = 0
+  letterIndex: number = 0
+
+  constructor(slotIndex: number, letterIndex: number) {
+    this.slotIndex = slotIndex
+    this.letterIndex = letterIndex
   }
 }
 
@@ -97,11 +94,13 @@ export class GameState {
   showTutorial: boolean = false
 
   constructor() {
-    this.maxUnlockedLevel = AppStorage.get(MAX_UNLOCKED_KEY) as number
-    this.currentLevelId = AppStorage.get(CURRENT_LEVEL_KEY) as number
+    this.maxUnlockedLevel = AppStorage.get<number>(MAX_UNLOCKED_KEY) ?? 1
+    this.currentLevelId = AppStorage.get<number>(CURRENT_LEVEL_KEY) ?? 1
+    this.isTutorialDone = AppStorage.get<boolean>(GameState.TUTORIAL_DONE) ?? false
   }
 
   ensureTutorialOnFirstLaunch(): void {
+    this.isTutorialDone = AppStorage.get<boolean>(GameState.TUTORIAL_DONE) ?? false
     if (!this.isTutorialDone) {
       this.showTutorial = true
     }
@@ -111,6 +110,7 @@ export class GameState {
     this.showTutorial = false
     if (markDone) {
       this.isTutorialDone = true
+      AppStorage.set<boolean>(GameState.TUTORIAL_DONE, true)
     }
   }
 
@@ -122,8 +122,8 @@ export class GameState {
 
     this.currentLevel = level
     this.currentLevelId = levelId
-    AppStorage.set(CURRENT_LEVEL_KEY, levelId)
     this.resetLevelState(level)
+    AppStorage.set(CURRENT_LEVEL_KEY, levelId)
   }
 
   unlockNextLevel(): void {
@@ -135,43 +135,29 @@ export class GameState {
     if (this.hintCount <= 0) {
       return false
     }
-    if (!this.currentLevel) {
+    const candidates: HintCandidate[] = []
+    for (let slotIndex = 0; slotIndex < this.wordSlots.length; slotIndex++) {
+      const slot = this.wordSlots[slotIndex]
+      if (slot.isFound) {
+        continue
+      }
+      for (let letterIndex = 0; letterIndex < slot.word.length; letterIndex++) {
+        if (slot.revealedIndexes.indexOf(letterIndex) === -1) {
+          candidates.push(new HintCandidate(slotIndex, letterIndex))
+        }
+      }
+    }
+
+    if (candidates.length === 0) {
       return false
     }
-    const hints = this.currentLevel.hints
 
-    while (this.hintIndex < hints.length) {
-      const hint = hints[this.hintIndex]
-      this.hintIndex += 1
-
-      let slotIdx = -1
-      for (let i = 0; i < this.wordSlots.length; i++) {
-        if (this.wordSlots[i].word === hint.word && !this.wordSlots[i].isFound) {
-          slotIdx = i
-          break
-        }
-      }
-      if (slotIdx === -1) {
-        continue
-      }  // word already found, skip to next hint
-
-      const slot = this.wordSlots[slotIdx]
-      for (let i = 0; i < hint.revealIndexes.length; i++) {
-        const idx = hint.revealIndexes[i]
-        let already = false
-        for (let j = 0; j < slot.revealedIndexes.length; j++) {
-          if (slot.revealedIndexes[j] === idx) { already = true; break }
-        }
-        if (!already) {
-          slot.revealedIndexes.push(idx)
-        }
-      }
-
-      this.hintCount -= 1
-      this.updateScore()
-      return true
-    }
-    return false
+    const selectedIndex = Math.floor(secureRandomNumber() * candidates.length)
+    const selected = candidates[selectedIndex]
+    this.wordSlots[selected.slotIndex].revealedIndexes.push(selected.letterIndex)
+    this.hintCount -= 1
+    this.updateScore()
+    return true
   }
 
   shuffleLetters(): void {
@@ -184,11 +170,11 @@ export class GameState {
     }
     const origX0 = positions[0][0]
     for (let i = positions.length - 1; i > 0; i--) {
-      const j = Math.floor(getRandomValue() * (i + 1))
+      const j = Math.floor(secureRandomNumber() * (i + 1))
       const tmp = positions[i]
       positions[i] = positions[j]
       positions[j] = tmp
-    } // Identity permutation — force a swap so something always changes
+    }
     if (Math.abs(positions[0][0] - origX0) < 1) {
       const tmp = positions[0]
       positions[0] = positions[1]
@@ -208,7 +194,7 @@ export class GameState {
       return
     }
 
-    const index = this.letters.findIndex((l: LetterItem) => l.id === letterItem.id)
+    const index = this.findLetterIndex(this.letters, letterItem.id)
     if (index !== -1) {
       this.letters[index].isSelected = true
       this.selectedLetters.push(this.letters[index])
@@ -303,22 +289,27 @@ export class GameState {
 
     this.letters = this.arrangeLettersInCircle(level.letters)
     this.computeIndicatorPositions(level.letters.length)
-    this.wordSlots = level.words.map((word: string) => {
+    const slots: WordSlot[] = []
+    for (let i = 0; i < level.words.length; i++) {
+      const word = level.words[i]
       const pos = this.findWordInGrid(word, level.grid)
-      return new WordSlot(word, pos?.row ?? 0, pos?.col ?? 0, pos?.dir ?? 'H')
-    })
+      slots.push(new WordSlot(word, pos?.row ?? 0, pos?.col ?? 0, pos?.dir ?? 'H'))
+    }
+    this.wordSlots = slots
     this.updateScore()
   }
 
   private findWordInGrid(word: string, grid: string[][]): WordPos | undefined {
     const rows = grid.length
-    // H scan
     for (let r = 0; r < rows; r++) {
       const cols = grid[r].length
       for (let c = 0; c <= cols - word.length; c++) {
         let ok = true
         for (let i = 0; i < word.length; i++) {
-          if ((grid[r][c + i] ?? '') !== word[i]) { ok = false; break }
+          if ((grid[r][c + i] ?? '') !== word[i]) {
+            ok = false
+            break
+          }
         }
         const leftOk  = c === 0 || (grid[r][c - 1] ?? '') === ''
         const rightOk = c + word.length >= cols || (grid[r][c + word.length] ?? '') === ''
@@ -328,13 +319,15 @@ export class GameState {
         }
       }
     }
-    // V scan
     const cols0 = grid[0]?.length ?? 0
     for (let c = 0; c < cols0; c++) {
       for (let r = 0; r <= rows - word.length; r++) {
         let ok = true
         for (let i = 0; i < word.length; i++) {
-          if ((grid[r + i][c] ?? '') !== word[i]) { ok = false; break }
+          if ((grid[r + i][c] ?? '') !== word[i]) {
+            ok = false
+            break
+          }
         }
         const topOk    = r === 0 || (grid[r - 1][c] ?? '') === ''
         const bottomOk = r + word.length >= rows || (grid[r + word.length][c] ?? '') === ''
@@ -363,23 +356,18 @@ export class GameState {
     return result
   }
 
-  // Place hint, bonus & shuffle in the gaps between letters on the same circle.
   private computeIndicatorPositions(count: number): void {
     const center = Math.floor(AppSizes.SCREEN_SIZE / 2)
     const radius = AppSizes.LETTER_EDGE_RADIUS
     const step = 2 * Math.PI / count
 
-    // Gaps are evenly spaced, so nearest index = round(offset / step)
-    const nearestGap =
-      (target: number): number => ((Math.round((target + Math.PI / 2 - step / 2) / step) % count) + count) % count
-
-    const hintIdx = nearestGap(-Math.PI / 4) // upper-right
-    let bonusIdx = nearestGap(Math.PI / 2) // bottom
+    const hintIdx = this.nearestGap(-Math.PI / 4, step, count)
+    let bonusIdx = this.nearestGap(Math.PI / 2, step, count)
     if (bonusIdx === hintIdx) {
       bonusIdx = (bonusIdx + 1) % count
     }
 
-    let shuffleIdx = nearestGap(Math.PI)
+    let shuffleIdx = this.nearestGap(Math.PI, step, count)
     if (shuffleIdx === hintIdx) {
       shuffleIdx = (shuffleIdx + 1) % count
     }
@@ -388,24 +376,18 @@ export class GameState {
     }
     if (shuffleIdx === hintIdx) {
       shuffleIdx = bonusIdx
-    } // 2-letter fallback: overlaps hidden bonus
-
-    // Gap index -> top-left pixel position
-    const toPos = (i: number, half: number): number[] => {
-      const a = step * i - Math.PI / 2 + step / 2
-      return [center + radius * Math.cos(a) - half, center + radius * Math.sin(a) - half]
     }
 
-    this.hintPos = toPos(hintIdx, GameLayout.HINT_SIZE / 2)
-    this.bonusPos = toPos(bonusIdx, GameLayout.BONUS_SIZE / 2)
-    this.shufflePos = toPos(shuffleIdx, GameLayout.SHUFFLE_SIZE / 2)
+    this.hintPos = this.indicatorPosition(hintIdx, GameLayout.HINT_SIZE / 2, center, radius, step)
+    this.bonusPos = this.indicatorPosition(bonusIdx, GameLayout.BONUS_SIZE / 2, center, radius, step)
+    this.shufflePos = this.indicatorPosition(shuffleIdx, GameLayout.SHUFFLE_SIZE / 2, center, radius, step)
   }
 
   private deselectLetter(letterItem: LetterItem): void {
-    const index = this.letters.findIndex((l: LetterItem) => l.id === letterItem.id)
+    const index = this.findLetterIndex(this.letters, letterItem.id)
     if (index !== -1) {
       this.letters[index].isSelected = false
-      const selectedIndex = this.selectedLetters.findIndex((l: LetterItem) => l.id === letterItem.id)
+      const selectedIndex = this.findLetterIndex(this.selectedLetters, letterItem.id)
       if (selectedIndex !== -1) {
         this.selectedLetters.splice(selectedIndex, 1)
       }
@@ -416,7 +398,7 @@ export class GameState {
   private updateCurrentWord(): void {
     let word = ''
     for (let i = 0; i < this.selectedLetters.length; i++) {
-      word += this.selectedLetters[i].letter
+      word = `${word}${this.selectedLetters[i].letter}`
     }
     this.currentWord = word
   }
@@ -438,6 +420,33 @@ export class GameState {
     const hintPenalty = hintsUsed * (60 / GameState.INITIAL_HINT_COUNT)
 
     this.levelScore = Math.max(0, mainScore + bonusScore - hintPenalty)
+  }
+
+  private findLetterIndex(letters: LetterItem[], id: number): number {
+    for (let i = 0; i < letters.length; i++) {
+      if (letters[i].id === id) {
+        return i
+      }
+    }
+    return -1
+  }
+
+  private nearestGap(target: number, step: number, count: number): number {
+    return ((Math.round((target + Math.PI / 2 - step / 2) / step) % count) + count) % count
+  }
+
+  private indicatorPosition(
+    index: number,
+    half: number,
+    center: number,
+    radius: number,
+    step: number
+  ): number[] {
+    const angle = step * index - Math.PI / 2 + step / 2
+    return [
+      center + radius * Math.cos(angle) - half,
+      center + radius * Math.sin(angle) - half
+    ]
   }
 }
 

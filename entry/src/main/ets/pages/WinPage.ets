@@ -1,9 +1,8 @@
 import { AppColors, difficultyBgColor } from '../common/Constants'
 import { getTotalLevels } from '../model/LevelData'
 import { gameState } from '../viewmodel/GameViewModel'
-import { BackButton } from '../components/BackButton'
-import { PillButton } from '../components/PillButton'
-import { cryptoFramework } from '@kit.CryptoArchitectureKit'
+import { StatsStore } from '../components/StatsStore'
+import { secureRandomNumber } from '../utils/SecureRandom'
 
 class ConfettiPiece {
   x: number = 0
@@ -29,19 +28,6 @@ class ConfettiPiece {
   }
 }
 
-function getRandomValue(): number {
-  try {
-    const random = cryptoFramework.createRandom();
-    const randomBytes = random.generateRandomSync(4);
-    const view = new DataView(randomBytes.data.buffer);
-    const randomUint32 = view.getUint32(0, false);
-    return randomUint32 / 4294967296;
-  } catch (error) {
-    console.error('Random generation error:', error);
-    return 1
-  }
-}
-
 @Component
 export struct WinPage {
   @Consume('navPathStack') navPathStack: NavPathStack
@@ -51,7 +37,12 @@ export struct WinPage {
   @State bgColor: string = AppColors.BACKGROUND_DARK
   @State showConfetti: boolean = false
   @State confettiOpacity: number = 0
+  @State scoreValue: number = 0
+  @State wordsFound: number = 0
+  @State wordsTotal: number = 0
+  @State completionTime: string = '--'
   private levelScore: number = 0
+  private starScaleValues: number[] = [0, 0, 0, 0, 0]
   private mainStars: number[] = [1, 2, 3]
   private bonusStars: number[] = [4, 5]
   private confettiSettings: RenderingContextSettings = new RenderingContextSettings(true)
@@ -62,39 +53,46 @@ export struct WinPage {
   aboutToAppear(): void {
     this.currentLevel = gameState.currentLevelId
     this.levelScore = gameState.levelScore
+    this.scoreValue = Math.round(this.levelScore)
+    this.wordsFound = gameState.foundWords.length
+    this.wordsTotal = gameState.wordSlots.length
+    this.completionTime = this.formatDuration(StatsStore.getLastCompletedLevelMs())
     this.earnedStars = this.calcStars()
     this.bgColor = difficultyBgColor(gameState.currentLevel?.difficulty ?? 'medium')
+    this.starScaleValues = [0, 0, 0, 0, 0]
+    this.starScales = this.starScaleValues
     this.startStarReveal()
     this.startConfetti()
   }
 
   private startStarReveal(): void {
     const ui = this.getUIContext()
-    let scales: number[] = this.starScales.slice()
-    let starScales: number[] = [];
+    const visibleStars = Math.min(3, this.earnedStars)
 
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < visibleStars; i++) {
       const idx = i
 
       setTimeout(() => {
-        const s1 = scales.slice()
-        s1[idx] = 1.3
-        scales = s1
-        ui.animateTo({ duration: 150, curve: Curve.EaseIn }, () => {
-          starScales = s1
-        })
+        this.animateStarScale(idx, 1.42, 120, Curve.EaseOut, ui)
 
         setTimeout(() => {
-          const s2 = scales.slice()
-          s2[idx] = 1.0
-          scales = s2
-          ui.animateTo({ duration: 150, curve: Curve.EaseIn }, () => {
-            starScales = s2
-          })
-        }, 250)
-      }, 200 + idx * 250)
+          this.animateStarScale(idx, 0.94, 80, Curve.EaseIn, ui)
+
+          setTimeout(() => {
+            this.animateStarScale(idx, 1.0, 120, Curve.EaseOut, ui)
+          }, 90)
+        }, 130)
+      }, 160 + idx * 170)
     }
-    this.starScales = starScales
+  }
+
+  private animateStarScale(index: number, scale: number, duration: number, curve: Curve, ui: UIContext): void {
+    const nextScales = this.starScaleValues.slice()
+    nextScales[index] = scale
+    this.starScaleValues = nextScales
+    ui.animateTo({ duration, curve }, () => {
+      this.starScales = nextScales
+    })
   }
 
   aboutToDisappear(): void {
@@ -105,53 +103,58 @@ export struct WinPage {
     NavDestination() {
       Stack() {
         Column() {
-          Text('WELL DONE!')
-            .fontSize(20)
+          Text('WELL DONE')
+            .fontSize(18)
             .fontColor(AppColors.SUCCESS_GREEN)
             .fontWeight(FontWeight.Bold)
-            .margin({ top: 6, bottom: 4 })
+            .margin({ bottom: 2 })
 
           Row() {
             ForEach(this.mainStars, (starIndex: number) => {
               Text('\u2605')
-                .fontSize(36)
+                .fontSize(31)
                 .fontColor(starIndex <= this.earnedStars ? AppColors.STAR_GOLD : AppColors.GRAY_DARK)
-                .margin(3)
+                .margin(2)
                 .scale({ x: this.starScales[starIndex - 1], y: this.starScales[starIndex - 1] })
             }, (starIndex: number) => `star_ ${starIndex.toString()}`)
-          }.margin({ top: -4, bottom: -22 })
+          }.margin({ bottom: 4 })
 
-          Row() {
-            ForEach(this.bonusStars, (starIndex: number) => {
-              Text('\u2605')
-                .fontSize(36)
-                .fontColor(starIndex <= this.earnedStars ? AppColors.STAR_GOLD : 'transparent')
-                .margin(3)
-                .scale({ x: this.starScales[starIndex - 1], y: this.starScales[starIndex - 1] })
-            }, (starIndex: number) => `star_ ${starIndex.toString()}`)
-          }.margin({ bottom: 6 })
-
-          Text(`Level ${this.currentLevel.toString()}`).fontSize(16).fontColor(AppColors.WHITE)
+          Text(`Level ${this.currentLevel.toString()}`).fontSize(17).fontColor(AppColors.WHITE)
 
           Text('Completed').fontSize(12).fontColor(AppColors.GRAY_LIGHT).margin({ bottom: 6 })
+
+          Row() {
+            this.StatChip('Score', this.scoreValue.toString())
+            this.StatChip('Time', this.completionTime)
+            this.StatChip('Words', `${this.wordsFound.toString()}/${this.wordsTotal.toString()}`)
+          }
+          .justifyContent(FlexAlign.Center)
+          .margin({ bottom: 8 })
 
           // Buttons
           Column() {
             if (this.currentLevel < getTotalLevels()) {
               Stack() {
-                PillButton('NEXT', AppColors.PRIMARY_GOLD, this.bgColor, 120, 44)
+                this.WinActionButton('NEXT', AppColors.PRIMARY_GOLD, this.bgColor, 116, 36, 16)
               }.onClick(() => {
                 gameState.loadLevel(this.currentLevel + 1)
                 this.navPathStack.pop()
-              }).margin({ bottom: 8 })
+              })
+            } else {
+              Stack() {
+                this.WinActionButton('HOME', AppColors.PRIMARY_GOLD, this.bgColor, 116, 36, 16)
+              }.onClick(() => {
+                this.navPathStack.clear()
+              })
             }
           }
         }
-        .justifyContent(FlexAlign.Center)
-        .padding({ top: 20 })
+        .justifyContent(FlexAlign.Start)
+        .padding({ left: 0, right: 0 })
         .alignItems(HorizontalAlign.Center)
-        .width('100%')
-        .height('100%')
+        .width(190)
+        .height(190)
+        .position({ x: 21, y: 26 })
 
         if (this.showConfetti) {
           Canvas(this.confettiCtx)
@@ -162,35 +165,80 @@ export struct WinPage {
               this.drawConfetti()
             })
             .position({ x: 0, y: 0 })
+            .hitTestBehavior(HitTestMode.None)
         }
       }.width('100%').height('100%').backgroundColor(this.bgColor)
 
-      BackButton({
-        btnSize: 36, onBack: () => {
-          this.navPathStack.clear()
-        }
-      }).position({ x: 24, y: 4 })
     }.hideTitleBar(true).backgroundColor(this.bgColor)
+  }
+
+  @Builder
+  private StatChip(label: string, value: string) {
+    Column() {
+      Text(value)
+        .fontSize(14)
+        .fontColor(AppColors.WHITE)
+        .fontWeight(FontWeight.Bold)
+      Text(label)
+        .fontSize(9)
+        .fontColor(AppColors.GRAY_LIGHT)
+    }
+    .width(55)
+    .height(35)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('#00000040')
+    .borderRadius(8)
+    .margin({ left: 2, right: 2 })
+  }
+
+  @Builder
+  private WinActionButton(text: string, fillColor: string, textColor: string, width: number, height: number,
+    fontSize: number) {
+    Stack() {
+      Rect()
+        .width(width)
+        .height(height)
+        .fill(fillColor)
+        .radius(height / 2)
+      Text(text)
+        .fontSize(fontSize)
+        .fontColor(textColor)
+        .fontWeight(FontWeight.Bold)
+    }
+  }
+
+  private formatDuration(durationMs: number): string {
+    if (durationMs < 0) {
+      return '--'
+    }
+    const totalSeconds = Math.max(0, Math.floor(durationMs / 1000))
+    const minutes = Math.floor(totalSeconds / 60)
+    const seconds = totalSeconds % 60
+    if (minutes <= 0) {
+      return `${seconds.toString()}s`
+    }
+    const secText = seconds < 10 ? `0${seconds.toString()}` : seconds.toString()
+    return `${minutes.toString()}:${secText}`
   }
 
   private startConfetti(): void {
     this.confettiOpacity = 1
     this.showConfetti = true
     this.confettiParts = []
-    const w = 200
-    const h = 200
-
     const colors: string[] = [AppColors.PRIMARY_GOLD, AppColors.SUCCESS_GREEN, '#FF5A5F', '#4DA3FF', '#FFFFFF']
 
-    for (let i = 0; i < 24; i++) {
-      const x = getRandomValue() * w
-      const y = -10 - getRandomValue() * 40
-      const vx = (getRandomValue() - 0.5) * 1.6
-      const vy = 1.2 + getRandomValue() * 1.6
-      const size = 3 + getRandomValue() * 4
-      const vr = (getRandomValue() - 0.5) * 10
-      const life = 60 + Math.floor(getRandomValue() * 25)
-      const c = colors[Math.floor(getRandomValue() * colors.length)]
+    for (let i = 0; i < 28; i++) {
+      const angle = secureRandomNumber() * Math.PI * 2
+      const speed = 1.1 + secureRandomNumber() * 2.1
+      const x = 100 + (secureRandomNumber() - 0.5) * 18
+      const y = 74 + (secureRandomNumber() - 0.5) * 10
+      const vx = Math.cos(angle) * speed
+      const vy = Math.sin(angle) * speed - 0.9
+      const size = 2.5 + secureRandomNumber() * 3.5
+      const vr = (secureRandomNumber() - 0.5) * 10
+      const life = 42 + Math.floor(secureRandomNumber() * 24)
+      const c = colors[Math.floor(secureRandomNumber() * colors.length)]
       this.confettiParts.push(new ConfettiPiece(x, y, vx, vy, size, vr, life, c))
     }
 
@@ -206,11 +254,11 @@ export struct WinPage {
 
     setTimeout(() => {
       this.stopConfetti()
-    }, 4200)
+    }, 2600)
   }
 
   private stopConfetti(): void {
-    this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseOut }, () => {
+    this.getUIContext().animateTo({ duration: 320, curve: Curve.EaseOut }, () => {
       this.confettiOpacity = 0
     })
 
@@ -221,7 +269,7 @@ export struct WinPage {
       }
       this.showConfetti = false
       this.confettiCtx?.clearRect(0, 0, 200, 200)
-    }, 260)
+    }, 340)
   }
 
   private updateConfetti(): void {
@@ -231,7 +279,7 @@ export struct WinPage {
         continue
       }
 
-      p.vx += (getRandomValue() - 0.5) * 0.05
+      p.vx += (secureRandomNumber() - 0.5) * 0.05
       p.vy += 0.04
       p.x += p.vx
       p.y += p.vy

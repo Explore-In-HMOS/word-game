@@ -9,10 +9,25 @@ export struct HomePage {
   @Consume('navPathStack') navPathStack: NavPathStack
   @StorageLink(CURRENT_LEVEL_KEY) currentLevelId: number = 1
   @State buttonScale: number = 1.0
+  private buttonPulseTimerId: number = 0
+
+  aboutToAppear(): void {
+    this.startButtonPulse()
+  }
+
+  aboutToDisappear(): void {
+    if (this.buttonPulseTimerId > 0) {
+      clearInterval(this.buttonPulseTimerId)
+      this.buttonPulseTimerId = 0
+    }
+  }
 
   build() {
     Column() {
-      Text('WORD').fontSize(22).fontColor(AppColors.PRIMARY_GOLD).fontWeight(FontWeight.Bold)
+      Text('WORD')
+        .fontSize(22)
+        .fontColor(AppColors.PRIMARY_GOLD)
+        .fontWeight(FontWeight.Bold)
 
       Text('Game').fontSize(14).fontColor(AppColors.WHITE).fontWeight(FontWeight.Medium).margin({ bottom: 10 })
 
@@ -26,14 +41,15 @@ export struct HomePage {
           .textAlign(TextAlign.Center)
           .backgroundColor(AppColors.LETTER_BG)
           .borderRadius(17)
-          .translate({x: 0, y: 0})
+          .translate({ x: 0, y: 0 })
           .onClick(() => {
             this.navPathStack.pushPathByName(PageNames.STATISTICS, null)
           })
 
         Text('').width(44).height(34)
 
-        Image($r('app.media.logo')).width(90).height(90).objectFit(ImageFit.Contain).translate({x: -16, y: 0}).backgroundColor(Color.Transparent)
+        Image($r('app.media.logo')).width(90).height(90).objectFit(ImageFit.Contain).translate({ x: -16, y: 0 })
+          .backgroundColor(Color.Transparent)
 
         Text('\u2699')
           .fontSize(20)
@@ -50,8 +66,16 @@ export struct HomePage {
       }.alignItems(VerticalAlign.Center).margin({ bottom: 12 })
 
       Stack() {
-        PillButton(`LEVEL ${this.currentLevelId.toString()}`, AppColors.PRIMARY_GOLD, AppColors.BACKGROUND_DARK, 150, 42)
-      }.scale({ x: this.buttonScale, y: this.buttonScale }).onClick(() => {
+        PillButton(
+          `LEVEL ${this.currentLevelId.toString()}`,
+          AppColors.PRIMARY_GOLD,
+          AppColors.BACKGROUND_DARK,
+          150,
+          42
+        )
+      }
+      .translate({ y: -15 })
+      .scale({ x: this.buttonScale, y: this.buttonScale }).onClick(() => {
         this.getUIContext().animateTo({ duration: 100 }, () => {
           this.buttonScale = 0.9
         })
@@ -70,4 +94,18 @@ export struct HomePage {
     .height('100%')
     .backgroundColor(AppColors.BACKGROUND_DARK)
   }
+
+  private startButtonPulse(): void {
+    this.buttonPulseTimerId = setInterval(() => {
+      this.getUIContext().animateTo({ duration: 520, curve: Curve.EaseInOut }, () => {
+        this.buttonScale = 1.04
+      })
+      setTimeout(() => {
+        this.getUIContext().animateTo({ duration: 520, curve: Curve.EaseInOut }, () => {
+          this.buttonScale = 1.0
+        })
+      }, 540)
+    }, 1500) as number
+  }
+
 }

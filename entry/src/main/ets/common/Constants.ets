@@ -30,7 +30,7 @@ export class AppSizes {
   static readonly SPACING_LARGE: number = 12
   static readonly BORDER_RADIUS: number = 18
   static readonly SCREEN_SIZE: number = 233
-  static readonly LETTER_EDGE_RADIUS: number = 85
+  static readonly LETTER_EDGE_RADIUS: number = 92
 }
 
 export class GameLayout {
@@ -54,6 +54,7 @@ export class PageNames {
 
 export class Settings {
   static readonly SOUND_ENABLED_KEY: string = 'soundEnabled'
+  static readonly HAPTIC_ENABLED_KEY: string = 'hapticEnabled'
   static readonly IS_DARK_THEME_KEY: string = 'isDarkTheme'
 }
 
